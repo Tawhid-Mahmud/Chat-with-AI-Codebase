@@ -1,0 +1,8 @@
+streamlit
+gitpython
+pinecone-client
+groq
+sentence-transformers
+PyGithub
+langchain-pinecone
+langchain-community
