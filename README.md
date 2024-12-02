@@ -42,13 +42,11 @@ A Streamlit-based AI chatbot that combines vector search capabilities with Pinec
   - Model: all-MiniLM-L6-v2
 
 ## Dependencies
-
-- streamlit
-- pinecone-client
-- sentence-transformers
-- groq
-- google-api-core
-- google-cloud-core
-- grpcio-tools
-- protobuf
-
+streamlit
+gitpython
+pinecone-client
+groq
+sentence-transformers
+PyGithub
+langchain-pinecone
+langchain-community
