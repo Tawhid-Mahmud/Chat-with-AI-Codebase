@@ -8,6 +8,7 @@ This application provides a chat interface to interact with and query codebases 
 # Standard library imports
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 
 # Third-party imports
 import streamlit as st
@@ -131,6 +132,20 @@ def get_main_files_content(repo_path):
 pc = Pinecone()
 pinecone_index = pc.Index(name='codebase-rag')
 
+# Retrieve namespaces from Pinecone
+namespaces = pinecone_index.describe_index_stats()["namespaces"].keys()
+
+def process_file(file):
+    code_chunks = get_code_chunks(file['content'])
+    documents = []
+    for i, chunk in enumerate(code_chunks):
+        doc = Document(
+            page_content=chunk,
+            metadata={"source": file['name'], "chunk_id": i, "text": chunk}
+        )
+        documents.append(doc)
+    return documents
+
 # Function to get Hugging Face embeddings
 def get_huggingface_embeddings(text, model_name="sentence-transformers/all-mpnet-base-v2"):
     model = SentenceTransformer(model_name)
@@ -162,40 +177,13 @@ def perform_rag(query, namespace):
 # Initialize the Groq client with the API key
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-# Repository URL input
-repo_url = st.text_input("Enter GitHub Repository URL:")
+# # Repository URL input
+# repo_url = st.text_input("Enter GitHub Repository URL:")
 
-if repo_url:
-    if 'repo_processed' not in st.session_state:
-        st.session_state.repo_processed = False
-    if not st.session_state.repo_processed:
-        with st.spinner("Processing repository..."):
-            # Clone repository
-            repo_path = clone_repository(repo_url)
-            
-            # Get file contents
-            file_content = get_main_files_content(repo_path)
-            
-            # Process and store embeddings
-            documents = []
-            for file in file_content:
-                code_chunks = get_code_chunks(file['content'])
-                for i, chunk in enumerate(code_chunks):
-                    doc = Document(
-                        page_content=chunk,
-                        metadata={"source": file['name'], "chunk_id": i, "text": chunk}
-                    )
-                    documents.append(doc)
-            
-            vectorstore = PineconeVectorStore.from_documents(
-                documents=documents,
-                embedding=HuggingFaceEmbeddings(),
-                index_name="codebase-rag",
-                namespace=repo_url
-            )
-            
-            st.session_state.repo_processed = True
-            st.success("Repository processed and embeddings stored!")
+
+
+
+# Streamlit UI starts here
 
 GroqModel_1 = "llama-3.1-70b-versatile"
 GroqModel_2 = "llama-3.1-8b-instant"
@@ -218,6 +206,61 @@ if 'messages' not in st.session_state:
 selected_model = st.selectbox("Select AI Model:", model_options, index=model_options.index(st.session_state["groq_model"]))
 st.session_state["groq_model"] = selected_model
 
+
+
+# Object notation
+st.sidebar.title("Repository")
+# "with" notation
+with st.sidebar:
+    #st.text_input("Enter GitHub Repository URL:", key="sidebar_repo_url")
+
+    # Repository URL input
+    repo_url = st.text_input("Enter GitHub Repository URL:", key="sidebar_repo_url")
+
+    if repo_url:
+        # Derive namespace from the repo URL
+        namespace = repo_url.strip()  # Ensure no leading/trailing spaces
+
+        # Check if the namespace already exists
+        if namespace in namespaces:
+            st.warning("This repository has already been processed and exists in the namespace.")
+        else:
+            if 'repo_processed' not in st.session_state:
+                st.session_state.repo_processed = False
+            if not st.session_state.repo_processed:
+                with st.spinner("Processing repository..."):
+                    # Clone repository
+                    repo_path = clone_repository(repo_url)
+                    
+                    # Get file contents
+                    file_content = get_main_files_content(repo_path)
+                    
+                    # Process and store embeddings in parallel
+                    documents = []
+                    with ThreadPoolExecutor() as executor:
+                        results = executor.map(process_file, file_content)
+                        for result in results:
+                            documents.extend(result)
+                    
+                    vectorstore = PineconeVectorStore.from_documents(
+                        documents=documents,
+                        embedding=HuggingFaceEmbeddings(),
+                        index_name="codebase-rag",
+                        namespace=repo_url
+                    )
+                    
+                    st.session_state.repo_processed = True
+                    st.success("Repository processed and embeddings stored!")
+    
+# Dropdown for AI Model
+with st.sidebar:
+    st.selectbox("Select AI Model", model_options, key="model_selection")
+# Dropdown for Namespace
+with st.sidebar:
+    selected_namespace = st.selectbox("Select A Codebase", list(namespaces), key="namespace_selection")
+
+
+
 st.title("Ask your codebase")
 
 # Display chat messages from history on app rerun
@@ -228,16 +271,16 @@ for message in st.session_state.messages:
 # Accept user input
 prompt = st.chat_input("Ask me something about the codebase")
 if prompt:
-    # Check if repository is processed
-    if not st.session_state.repo_processed:
-        st.warning("PLEASE ENTER A GITHUB REPOSITORY URL")
+    # Check if a namespace is selected
+    if not st.session_state.get("namespace_selection"):
+        st.warning("PLEASE SELECT A NAMESPACE")
     else:
         # Display user message first
         with st.chat_message("user"):
             st.markdown(prompt)
             
         # Get RAG response
-        response = perform_rag(prompt, repo_url)
+        response = perform_rag(prompt, selected_namespace)
         
         # Display assistant response in chat message container
         with st.chat_message("assistant"):
